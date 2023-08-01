@@ -1,6 +1,7 @@
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import reactor.blockhound.BlockHound;
 import reactor.core.Exceptions;
 import reactor.core.Scannable;
@@ -19,17 +20,17 @@ import java.util.stream.Collectors;
 /**
  * With multi-core architectures being a commodity nowadays, being able to easily parallelize work is important.
  * Reactor helps with that by providing many mechanisms to execute work in parallel.
- *
+ * <p>
  * Read first:
- *
+ * <p>
  * https://projectreactor.io/docs/core/release/reference/#schedulers
  * https://projectreactor.io/docs/core/release/reference/#advanced-parallelizing-parralelflux
  * https://projectreactor.io/docs/core/release/reference/#_the_publishon_method
  * https://projectreactor.io/docs/core/release/reference/#_the_subscribeon_method
  * https://projectreactor.io/docs/core/release/reference/#which.time
- *
+ * <p>
  * Useful documentation:
- *
+ * <p>
  * https://projectreactor.io/docs/core/release/reference/#which-operator
  * https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Mono.html
  * https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Flux.html
@@ -45,20 +46,23 @@ public class c9_ExecutionControl extends ExecutionControlBase {
      */
     @Test
     public void slow_down_there_buckaroo() {
-        long threadId = Thread.currentThread().getId();
+        long threadId = Thread.currentThread()
+                              .getId();
         Flux<String> notifications = readNotifications()
                 .doOnNext(System.out::println)
+                .delayElements(Duration.ofSeconds(1))
                 //todo: change this line only
                 ;
 
         StepVerifier.create(notifications
-                                    .doOnNext(s -> assertThread(threadId)))
+                            .doOnNext(s -> assertThread(threadId)))
                     .expectNextCount(5)
                     .verifyComplete();
     }
 
     private void assertThread(long invokerThreadId) {
-        long currentThread = Thread.currentThread().getId();
+        long currentThread = Thread.currentThread()
+                                   .getId();
         if (currentThread != invokerThreadId) {
             System.out.println("-> Not on the same thread");
         } else {
@@ -77,8 +81,7 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     public void ready_set_go() {
         //todo: feel free to change code as you need
         Flux<String> tasks = tasks()
-                .flatMap(Function.identity());
-        semaphore();
+                .concatMap(stringMono -> stringMono.delaySubscription(semaphore()));
 
         //don't change code below
         StepVerifier.create(tasks)
@@ -101,11 +104,13 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     public void non_blocking() {
         Mono<Void> task = Mono.fromRunnable(() -> {
                                   Thread currentThread = Thread.currentThread();
-                                  assert NonBlocking.class.isAssignableFrom(Thread.currentThread().getClass());
+                                  assert NonBlocking.class.isAssignableFrom(Thread.currentThread()
+                                                                                  .getClass());
                                   System.out.println("Task executing on: " + currentThread.getName());
                               })
                               //todo: change this line only
-                              .then();
+                              .then()
+                              .subscribeOn(Schedulers.parallel());
 
         StepVerifier.create(task)
                     .verifyComplete();
@@ -121,7 +126,7 @@ public class c9_ExecutionControl extends ExecutionControlBase {
         BlockHound.install(); //don't change this line
 
         Mono<Void> task = Mono.fromRunnable(ExecutionControlBase::blockingCall)
-                              .subscribeOn(Schedulers.single())//todo: change this line only
+                              .subscribeOn(Schedulers.boundedElastic())//todo: change this line only
                               .then();
 
         StepVerifier.create(task)
@@ -134,10 +139,12 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     @Test
     public void free_runners() {
         //todo: feel free to change code as you need
-        Mono<Void> task = Mono.fromRunnable(ExecutionControlBase::blockingCall);
+        Mono<Void> task = Mono.fromRunnable(ExecutionControlBase::blockingCall)
+                              .subscribeOn(Schedulers.boundedElastic())
+                              .then();
 
         Flux<Void> taskQueue = Flux.just(task, task, task)
-                                   .concatMap(Function.identity());
+                                   .flatMap(Function.identity(), 3);
 
         //don't change code below
         Duration duration = StepVerifier.create(taskQueue)
@@ -154,7 +161,7 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     public void sequential_free_runners() {
         //todo: feel free to change code as you need
         Flux<String> tasks = tasks()
-                .flatMap(Function.identity());
+                .flatMapSequential(Function.identity());
         ;
 
         //don't change code below
@@ -176,9 +183,12 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     public void event_processor() {
         //todo: feel free to change code as you need
         Flux<String> eventStream = eventProcessor()
+                .parallel()
+                .runOn(Schedulers.parallel())
                 .filter(event -> event.metaData.length() > 0)
                 .doOnNext(event -> System.out.println("Mapping event: " + event.metaData))
                 .map(this::toJson)
+                .sequential()
                 .concatMap(n -> appendToStore(n).thenReturn(n));
 
         //don't change code below
